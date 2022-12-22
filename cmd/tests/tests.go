@@ -52,10 +52,7 @@ func Main(m *testing.M) {
 	}()
 
 	defer func() {
-		// TODO: figure out why logrus' `Entry.WriterLevel` goroutine sticks
-		// around and remove this exception.
-		opt := goleak.IgnoreTopFunction("io.(*pipe).read")
-		if err := goleak.Find(opt); err != nil {
+		if err := goleak.Find(); err != nil {
 			fmt.Println(err) //nolint:forbidigo
 			exitCode = 3
 		}
