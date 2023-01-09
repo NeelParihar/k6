@@ -73,6 +73,60 @@ func (c *Client) Request(method string, url goja.Value, args ...goja.Value) (*Re
 	return c.responseFromHTTPext(resp), nil
 }
 
+// Request makes an http request of the provided `method` and returns a corresponding response by
+// taking goja.Values as arguments
+func (c *Client) asyncRequest(method string, url goja.Value, args ...goja.Value) (*goja.Promise, error) {
+	state := c.moduleInstance.vu.State()
+	if state == nil {
+		return nil, ErrHTTPForbiddenInInitContext
+	}
+
+	var body interface{}
+	var params goja.Value
+
+	if len(args) > 0 {
+		body = args[0].Export()
+	}
+	if len(args) > 1 {
+		params = args[1]
+	}
+
+	req, err := c.parseRequest(method, url, body, params)
+	if err != nil {
+		if state.Options.Throw.Bool {
+			return nil, err
+		}
+		state.Logger.WithField("error", err).Warn("Request Failed")
+		r := httpext.NewResponse()
+		r.Error = err.Error()
+		var k6e httpext.K6Error
+		if errors.As(err, &k6e) {
+			r.ErrorCode = int(k6e.Code)
+		}
+		p, resolve, _ := goja.New().NewPromise()
+		resolve(&Response{Response: r, client: c})
+		return p, nil
+	}
+
+	p, resolve, reject := goja.New().NewPromise()
+	callback := c.moduleInstance.vu.RegisterCallback()
+
+	go func() {
+		resp, err := httpext.MakeRequest(c.moduleInstance.vu.Context(), state, req)
+		callback(func() error {
+			if err != nil {
+				_ = reject
+				return err // maybe reject
+			}
+			c.processResponse(resp, req.ResponseType)
+			resolve(c.responseFromHTTPext(resp))
+			return nil
+		})
+	}()
+
+	return p, nil
+}
+
 // processResponse stores the body as an ArrayBuffer if indicated by
 // respType. This is done here instead of in httpext.readResponseBody to avoid
 // a reverse dependency on js/common or goja.
@@ -87,6 +141,7 @@ func (c *Client) responseFromHTTPext(resp *httpext.Response) *Response {
 }
 
 // TODO: break this function up
+//
 //nolint:gocyclo, cyclop, funlen, gocognit
 func (c *Client) parseRequest(
 	method string, reqURL, body interface{}, params goja.Value,
