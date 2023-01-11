@@ -5,11 +5,11 @@ import "testing"
 func TestOptionsValidate(t *testing.T) {
 	t.Parallel()
 
-	testFloat := 10.0
+	var testSampling int = 10.0
 
 	type fields struct {
 		Propagator string
-		Sampling   *float64
+		Sampling   *int
 		Baggage    map[string]string
 	}
 	testCases := []struct {
@@ -48,7 +48,7 @@ func TestOptionsValidate(t *testing.T) {
 		{
 			name: "sampling is not yet supported",
 			fields: fields{
-				Sampling: &testFloat,
+				Sampling: &testSampling,
 			},
 			wantErr: true,
 		},
