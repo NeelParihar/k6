@@ -13,6 +13,8 @@ type (
 	// ModuleInstance represents an instance of the JS module.
 	ModuleInstance struct {
 		vu modules.VU
+
+		*Tracing
 	}
 )
 
@@ -32,11 +34,18 @@ func New() *RootModule {
 func (*RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 	return &ModuleInstance{
 		vu: vu,
+		Tracing: &Tracing{
+			vu: vu,
+		},
 	}
 }
 
 // Exports implements the modules.Instance interface and returns
 // the exports of the JS module.
 func (mi *ModuleInstance) Exports() modules.Exports {
-	return modules.Exports{}
+	return modules.Exports{
+		Named: map[string]interface{}{
+			"Client": mi.NewClient,
+		},
+	}
 }
