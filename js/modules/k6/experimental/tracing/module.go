@@ -45,7 +45,8 @@ func (*RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 func (mi *ModuleInstance) Exports() modules.Exports {
 	return modules.Exports{
 		Named: map[string]interface{}{
-			"Client": mi.NewClient,
+			"Client":         mi.NewClient,
+			"instrumentHTTP": mi.InstrumentHTTP,
 		},
 	}
 }
