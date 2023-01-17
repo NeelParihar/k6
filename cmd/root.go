@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	stdlog "log"
 	"strconv"
 	"strings"
@@ -21,7 +20,7 @@ import (
 	"go.k6.io/k6/log"
 )
 
-const waitRemoteLoggerTimeout = time.Second * 5
+const waitLoggerCloseTimeout = time.Second * 5
 
 // This is to keep all fields needed for the main/root k6 command
 type rootCommand struct {
@@ -68,43 +67,27 @@ func newRootCommand(gs *state.GlobalState) *rootCommand {
 
 func (c *rootCommand) persistentPreRunE(cmd *cobra.Command, args []string) error {
 	var err error
-
 	c.loggerStopped, err = c.setupLoggers()
 	if err != nil {
 		return err
 	}
-	select {
-	case <-c.loggerStopped:
-	default:
-		c.loggerIsRemote = true
-	}
-
-	// Sometimes the Go runtime uses the standard log output to
-	// log some messages directly.
-	// It does when an invalid char is found in a Cookie.
-	// Check for details https://github.com/grafana/k6/issues/711#issue-341414887
-	stdlog.SetOutput(func() io.Writer {
-		w := c.globalState.Logger.Writer()
-		go func() {
-			<-c.globalState.Ctx.Done()
-			_ = w.Close()
-		}()
-		return w
-	}())
 	c.globalState.Logger.Debugf("k6 version: v%s", consts.FullVersion())
 	return nil
 }
 
 func (c *rootCommand) execute() {
 	ctx, cancel := context.WithCancel(c.globalState.Ctx)
-	defer cancel()
+	defer func() {
+		cancel()
+		c.waitLoggers()
+	}()
 	c.globalState.Ctx = ctx
 
 	err := c.cmd.Execute()
 	if err == nil {
-		cancel()
-		c.waitRemoteLogger()
-		// TODO: explicitly call c.globalState.osExit(0), for simpler tests and clarity?
+		// It is the default logic
+		// but we are doing it for clarity
+		c.globalState.OSExit(0)
 		return
 	}
 
@@ -129,8 +112,6 @@ func (c *rootCommand) execute() {
 	c.globalState.Logger.WithFields(fields).Error(errText)
 	if c.loggerIsRemote {
 		c.globalState.FallbackLogger.WithFields(fields).Error(errText)
-		cancel()
-		c.waitRemoteLogger()
 	}
 
 	c.globalState.OSExit(exitCode)
@@ -150,14 +131,8 @@ func ExecuteWithGlobalState(gs *state.GlobalState) {
 	newRootCommand(gs).execute()
 }
 
-func (c *rootCommand) waitRemoteLogger() {
-	if c.loggerIsRemote {
-		select {
-		case <-c.loggerStopped:
-		case <-time.After(waitRemoteLoggerTimeout):
-			c.globalState.FallbackLogger.Errorf("Remote logger didn't stop in %s", waitRemoteLoggerTimeout)
-		}
-	}
+func (c *rootCommand) waitLoggers() {
+	<-c.loggerStopped
 }
 
 func rootCmdPersistentFlagSet(gs *state.GlobalState) *pflag.FlagSet {
@@ -230,16 +205,17 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 		loggerForceColors = !c.globalState.Flags.NoColor && c.globalState.Stdout.IsTTY
 		c.globalState.Logger.SetOutput(c.globalState.Stdout)
 	case line == "none":
-		c.globalState.Logger.SetOutput(ioutil.Discard)
+		c.globalState.Logger.SetOutput(io.Discard)
 
 	case strings.HasPrefix(line, "loki"):
+		c.loggerIsRemote = true
 		ch = make(chan struct{}) // TODO: refactor, get it from the constructor
 		hook, err := log.LokiFromConfigLine(c.globalState.Ctx, c.globalState.FallbackLogger, line, ch)
 		if err != nil {
 			return nil, err
 		}
 		c.globalState.Logger.AddHook(hook)
-		c.globalState.Logger.SetOutput(ioutil.Discard) // don't output to anywhere else
+		c.globalState.Logger.SetOutput(io.Discard) // don't output to anywhere else
 		c.globalState.Flags.LogFormat = "raw"
 
 	case strings.HasPrefix(line, "file"):
@@ -253,10 +229,10 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 		}
 
 		c.globalState.Logger.AddHook(hook)
-		c.globalState.Logger.SetOutput(ioutil.Discard)
+		c.globalState.Logger.SetOutput(io.Discard)
 
 	default:
-		return nil, fmt.Errorf("unsupported log output '%s'", line)
+		return ch, fmt.Errorf("unsupported log output '%s'", line)
 	}
 
 	switch c.globalState.Flags.LogFormat {
@@ -272,5 +248,25 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 		})
 		c.globalState.Logger.Debug("Logger format: TEXT")
 	}
-	return ch, nil
+
+	// Sometimes the Go runtime uses the standard log output to
+	// log some messages directly.
+	// It does when an invalid char is found in a Cookie.
+	// Check for details https://github.com/grafana/k6/issues/711#issue-341414887
+	allLoggersDone := make(chan struct{})
+	w := c.globalState.Logger.Writer()
+	go func() {
+		<-c.globalState.Ctx.Done()
+		_ = w.Close()
+		select {
+		case <-ch:
+		case <-time.After(waitLoggerCloseTimeout):
+			c.globalState.FallbackLogger.Errorf("The logger didn't stop in %s", waitLoggerCloseTimeout)
+		}
+
+		close(allLoggersDone)
+	}()
+	stdlog.SetOutput(w)
+
+	return allLoggersDone, nil
 }

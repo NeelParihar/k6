@@ -6,12 +6,28 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.k6.io/k6/cmd/tests"
 	"go.k6.io/k6/lib/testutils"
 )
 
 func TestMain(m *testing.M) {
 	tests.Main(m)
+}
+
+func TestWrongCliFlagIterations(t *testing.T) {
+	t.Parallel()
+
+	ts := tests.NewGlobalTestState(t)
+	ts.CmdArgs = []string{"k6", "run", "--iterations", "foo", "-"}
+	ts.Stdin = bytes.NewBufferString(`export default function() {};`)
+	// TODO: check for exitcodes.InvalidConfig after https://github.com/loadimpact/k6/issues/883 is done...
+	ts.ExpectedExitCode = -1
+	rootcmd := newRootCommand(ts.GlobalState)
+	err := rootcmd.persistentPreRunE(nil, nil)
+	require.NoError(t, err)
+	rootcmd.execute()
+	assert.True(t, testutils.LogContains(ts.LoggerHook.Drain(), logrus.ErrorLevel, `invalid argument "foo"`))
 }
 
 func TestDeprecatedOptionWarning(t *testing.T) {

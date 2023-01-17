@@ -139,18 +139,6 @@ func TestRelativeLogPathWithSetupAndTeardown(t *testing.T) {
 	assert.Equal(t, "init\ninit\ninit\nbar\nfoo\nfoo\ninit\nbaz\ninit\n", string(logContents)) //nolint:dupword
 }
 
-func TestWrongCliFlagIterations(t *testing.T) {
-	t.Parallel()
-
-	ts := NewGlobalTestState(t)
-	ts.CmdArgs = []string{"k6", "run", "--iterations", "foo", "-"}
-	ts.Stdin = bytes.NewBufferString(`export default function() {};`)
-	// TODO: check for exitcodes.InvalidConfig after https://github.com/loadimpact/k6/issues/883 is done...
-	ts.ExpectedExitCode = -1
-	cmd.ExecuteWithGlobalState(ts.GlobalState)
-	assert.True(t, testutils.LogContains(ts.LoggerHook.Drain(), logrus.ErrorLevel, `invalid argument "foo"`))
-}
-
 func TestWrongEnvVarIterations(t *testing.T) {
 	t.Parallel()
 
@@ -1557,4 +1545,27 @@ func TestPrometheusRemoteWriteOutput(t *testing.T) {
 	ts.OutMutex.Unlock()
 
 	assert.Contains(t, stdout, "output: Prometheus remote write")
+}
+
+func TestBadLogOutput(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"NotExist":      "badout",
+		"FileBadConfig": "file=,levels=bad",
+		"LokiBadConfig": "loki=,levels=bad",
+	}
+
+	for name, tc := range cases {
+		name := name
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ts := NewGlobalTestState(t)
+			ts.CmdArgs = []string{"k6", "run", "--log-output", tc, "-"}
+			ts.Stdin = bytes.NewBufferString(`export default function () {};`)
+			ts.ExpectedExitCode = -1
+			cmd.ExecuteWithGlobalState(ts.GlobalState)
+		})
+	}
 }
