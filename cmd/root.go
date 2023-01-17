@@ -255,8 +255,8 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 	// Check for details https://github.com/grafana/k6/issues/711#issue-341414887
 	allLoggersDone := make(chan struct{})
 	w := c.globalState.Logger.Writer()
-	go func() {
-		<-c.globalState.Ctx.Done()
+	go func(glbctx context.Context) {
+		<-glbctx.Done()
 		_ = w.Close()
 		select {
 		case <-ch:
@@ -265,7 +265,7 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 		}
 
 		close(allLoggersDone)
-	}()
+	}(c.globalState.Ctx)
 	stdlog.SetOutput(w)
 
 	return allLoggersDone, nil
