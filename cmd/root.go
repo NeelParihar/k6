@@ -67,7 +67,7 @@ func newRootCommand(gs *state.GlobalState) *rootCommand {
 
 func (c *rootCommand) persistentPreRunE(cmd *cobra.Command, args []string) error {
 	var err error
-	c.loggerStopped, err = c.setupLoggers()
+	c.loggerStopped, err = c.setupLoggers(c.globalState.Ctx)
 	if err != nil {
 		return err
 	}
@@ -188,14 +188,13 @@ func (f RawFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 // The returned channel will be closed when the logger has finished flushing and pushing logs after
 // the provided context is closed. It is closed if the logger isn't buffering and sending messages
 // Asynchronously
-func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
+func (c *rootCommand) setupLoggers(ctx context.Context) (<-chan struct{}, error) {
 	ch := make(chan struct{})
 	close(ch)
 
 	if c.globalState.Flags.Verbose {
 		c.globalState.Logger.SetLevel(logrus.DebugLevel)
 	}
-
 	loggerForceColors := false // disable color by default
 	switch line := c.globalState.Flags.LogOutput; {
 	case line == "stderr":
@@ -206,31 +205,29 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 		c.globalState.Logger.SetOutput(c.globalState.Stdout)
 	case line == "none":
 		c.globalState.Logger.SetOutput(io.Discard)
-
 	case strings.HasPrefix(line, "loki"):
 		c.loggerIsRemote = true
 		ch = make(chan struct{}) // TODO: refactor, get it from the constructor
-		hook, err := log.LokiFromConfigLine(c.globalState.Ctx, c.globalState.FallbackLogger, line, ch)
+		hook, err := log.LokiFromConfigLine(ctx, c.globalState.FallbackLogger, line, ch)
 		if err != nil {
-			return nil, err
+			close(ch)
+			return ch, err
 		}
 		c.globalState.Logger.AddHook(hook)
 		c.globalState.Logger.SetOutput(io.Discard) // don't output to anywhere else
 		c.globalState.Flags.LogFormat = "raw"
-
 	case strings.HasPrefix(line, "file"):
 		ch = make(chan struct{}) // TODO: refactor, get it from the constructor
 		hook, err := log.FileHookFromConfigLine(
-			c.globalState.Ctx, c.globalState.FS, c.globalState.Getwd,
+			ctx, c.globalState.FS, c.globalState.Getwd,
 			c.globalState.FallbackLogger, line, ch,
 		)
 		if err != nil {
-			return nil, err
+			close(ch)
+			return ch, err
 		}
-
 		c.globalState.Logger.AddHook(hook)
 		c.globalState.Logger.SetOutput(io.Discard)
-
 	default:
 		return ch, fmt.Errorf("unsupported log output '%s'", line)
 	}
@@ -255,18 +252,16 @@ func (c *rootCommand) setupLoggers() (<-chan struct{}, error) {
 	// Check for details https://github.com/grafana/k6/issues/711#issue-341414887
 	allLoggersDone := make(chan struct{})
 	w := c.globalState.Logger.Writer()
-	go func(glbctx context.Context) {
-		<-glbctx.Done()
+	go func() {
+		<-ctx.Done()
 		_ = w.Close()
 		select {
 		case <-ch:
 		case <-time.After(waitLoggerCloseTimeout):
 			c.globalState.FallbackLogger.Errorf("The logger didn't stop in %s", waitLoggerCloseTimeout)
 		}
-
 		close(allLoggersDone)
-	}(c.globalState.Ctx)
+	}()
 	stdlog.SetOutput(w)
-
 	return allLoggersDone, nil
 }
