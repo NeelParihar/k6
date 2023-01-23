@@ -312,9 +312,23 @@ func (out *Output) getRunStatus(testErr error) cloudapi.RunStatus {
 		case errext.AbortedByTimeout:
 			return cloudapi.RunStatusAbortedLimit
 		case errext.AbortedByThresholdsAfterTestEnd:
-			// The test finished normally, it wasn't prematurely aborted. Such
-			// failures are tracked by the restult_status, not the run_status
-			// (so called "tainted" in some places of the API here).
+			// The test run finished normally, it wasn't prematurely aborted by
+			// anything while running, but the thresholds failed at the end and
+			// k6 will return an error and a non-zero exit code to the user.
+			//
+			// However, failures are tracked somewhat differently by the k6
+			// cloud compared to k6 OSS. It doesn't have a single pass/fail
+			// variable with multiple failure states, like k6's exit codes.
+			// Instead, it has two variables, result_status and run_status.
+			//
+			// The status of the thresholds is tracked by the binary
+			// result_status variable, which signifies whether the thresholds
+			// passed or failed (failure also called "tainted" in some places of
+			// the API here). The run_status signifies whether the test run
+			// finished normally and has a few fixed failures values.
+			//
+			// So, this specific k6 error will be communicated to the cloud only
+			// via result_status, while the run_status will appear normal.
 			return cloudapi.RunStatusFinished
 		}
 	}
